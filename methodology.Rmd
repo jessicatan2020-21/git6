@@ -1,0 +1,75 @@
+---
+title: "Methodology"
+author:
+  - name: Jessica Tan
+date: "`r Sys.Date()`"
+output: distill::distill_article
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.retina=3,
+                      echo = TRUE,
+                      eval = TRUE,
+                      message = FALSE,
+                      warning = FALSE)
+
+```
+
+
+# 1.0 Overview
+```{r, echo=TRUE, eval=TRUE}
+packages = c('tidytext', 'igraph', 'extrafont',
+             'tidygraph', 'ggraph', 'tcltk',
+             'widyr', 'wordcloud', 'readxl',
+             'DT', 'ggwordcloud', 'LDAvis', 
+             'textplot', 'tidyverse','lookup',
+             'dplyr', 'tidyr','tm','quanteda', 
+             'stringr', 'SnowballC','quanteda.textplots',
+             'visNetwork','lubridate', 'reshape2',
+             'RColorBrewer', 'htmltools', 'tidyr',
+             'readr', 'purrr','clock',
+             'corporaexplorer','stringr')
+
+for(p in packages){
+  if(!require(p, character.only = T)){
+    install.packages(p)
+  }
+  library(p, character.only = T)
+}
+```
+
+```{r eval=FALSE}
+news <- "data/news/"
+```
+
+```{r eval=FALSE}
+read_folder <- function(infolder) {
+  tibble(file = dir(infolder, 
+                    full.names = TRUE)) %>%
+    mutate(text = map(file, 
+                      read_lines)) %>%
+    transmute(id = basename(file), 
+              text) %>%
+    unnest(text)
+}
+```
+
+```{r eval=FALSE}
+raw_text <- tibble(folder = 
+                     dir(news, 
+                         full.names = TRUE)) %>%
+  mutate(folder_out = map(folder, 
+                          read_folder)) %>%
+  unnest(cols = c(folder_out)) %>%
+  transmute(newsgroup = basename(folder), 
+            id, text)
+
+write_rds(raw_text, "data/rds/news.rds")
+
+```
+
+```{r}
+raw_text <- read_rds("data/rds/news.rds")
+
+```
+

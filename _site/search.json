@@ -1,0 +1,34 @@
+{
+  "articles": [
+    {
+      "path": "about.html",
+      "title": "About this site",
+      "description": "Some additional details about the website",
+      "author": [],
+      "contents": "\r\n\r\n\r\n\r\n",
+      "last_modified": "2021-07-18T16:10:30+08:00"
+    },
+    {
+      "path": "index.html",
+      "title": "My Website",
+      "description": "Welcome to the website. I hope you enjoy it!\n",
+      "author": [],
+      "contents": "\r\n\r\n\r\n\r\n",
+      "last_modified": "2021-07-18T16:10:32+08:00"
+    },
+    {
+      "path": "methodology.html",
+      "title": "Methodology",
+      "author": [
+        {
+          "name": "Jessica Tan",
+          "url": {}
+        }
+      ],
+      "date": "`r Sys.Date()`",
+      "contents": "\r\n1.0 Overview\r\n\r\n\r\npackages = c('tidytext', 'igraph', 'extrafont',\r\n             'tidygraph', 'ggraph', 'tcltk',\r\n             'widyr', 'wordcloud', 'readxl',\r\n             'DT', 'ggwordcloud', 'LDAvis', \r\n             'textplot', 'tidyverse','lookup',\r\n             'dplyr', 'tidyr','tm','quanteda', \r\n             'stringr', 'SnowballC','quanteda.textplots',\r\n             'visNetwork','lubridate', 'reshape2',\r\n             'RColorBrewer', 'htmltools', 'tidyr',\r\n             'readr', 'purrr','clock',\r\n             'corporaexplorer','stringr')\r\n\r\nfor(p in packages){\r\n  if(!require(p, character.only = T)){\r\n    install.packages(p)\r\n  }\r\n  library(p, character.only = T)\r\n}\r\n\r\n\r\n\r\n\r\n\r\nnews <- \"data/news/\"\r\n\r\n\r\n\r\n\r\n\r\nread_folder <- function(infolder) {\r\n  tibble(file = dir(infolder, \r\n                    full.names = TRUE)) %>%\r\n    mutate(text = map(file, \r\n                      read_lines)) %>%\r\n    transmute(id = basename(file), \r\n              text) %>%\r\n    unnest(text)\r\n}\r\n\r\n\r\n\r\n\r\n\r\nraw_text <- tibble(folder = \r\n                     dir(news, \r\n                         full.names = TRUE)) %>%\r\n  mutate(folder_out = map(folder, \r\n                          read_folder)) %>%\r\n  unnest(cols = c(folder_out)) %>%\r\n  transmute(newsgroup = basename(folder), \r\n            id, text)\r\n\r\nwrite_rds(raw_text, \"data/rds/news.rds\")\r\n\r\n\r\n\r\n\r\n\r\nraw_text <- read_rds(\"data/rds/news.rds\")\r\n\r\n\r\n\r\n\r\n\r\n\r\n",
+      "last_modified": "2021-07-18T16:10:38+08:00"
+    }
+  ],
+  "collections": []
+}
