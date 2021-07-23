@@ -19,8 +19,8 @@ knitr::opts_chunk$set(fig.retina=3,
 # 1.0 Overview
 ```{r, echo=TRUE, eval=TRUE}
 packages = c('tidytext', 'igraph', 'extrafont',
-             'tidygraph', 'ggraph', 'tcltk',
-             'widyr', 'wordcloud', 'readxl',
+             'tidygraph', 'ggraph', 'tcltk','anytime',
+             'widyr', 'wordcloud', 'readxl', 'mgsub',
              'DT', 'ggwordcloud', 'LDAvis', 
              'textplot', 'tidyverse','lookup',
              'dplyr', 'tidyr','tm','quanteda', 
@@ -54,7 +54,7 @@ read_folder <- function(infolder) {
 }
 ```
 
-```{r eval=FALSE}
+```{r eval= FALSE}
 raw_text <- tibble(folder = 
                      dir(news, 
                          full.names = TRUE)) %>%
@@ -68,8 +68,639 @@ write_rds(raw_text, "data/rds/news.rds")
 
 ```
 
+
 ```{r}
 raw_text <- read_rds("data/rds/news.rds")
+cleaning_text <- raw_text
+```
 
+
+```{r}
+cleaning_text$date <- sub("PUBLISHED:", "", raw_text$text, 
+                     ignore.case = TRUE, fixed = FALSE)
+cleaning_text$date = anydate(cleaning_text$date)
+dates <- cleaning_text[c(1,2,4)]
+dates <- dates[complete.cases(dates),]
+```
+
+
+```{r}
+cleaning_text$title <- str_extract(cleaning_text$text, "TITLE:.*")
+cleaning_text$title <- gsub(paste0("TITLE:", collapse = "|"), "", cleaning_text$title)
+title <- cleaning_text[c(1,2,5)]
+title <- title[complete.cases(title),]  
+```
+
+
+```{r}
+cleaning_text$location <- str_extract(cleaning_text$text, "LOCATION:.*")
+cleaning_text$location <- gsub(paste0("LOCATION:", collapse = "|"), "", 
+                               cleaning_text$location)
+location <- cleaning_text[c(1,2,6)]
+location <- location[complete.cases(location),]  
+
+
+```
+
+
+
+
+```{r}
+cleaning_text <- cleaning_text[!(is.na(cleaning_text$text) |cleaning_text$text==""|
+                         cleaning_text$text==" "),]
+cleaning_text <- cleaning_text[!grepl("SOURCE:", cleaning_text$text),]
+cleaning_text <- cleaning_text[!grepl("PUBLISHED:", cleaning_text$text),]
+cleaning_text <- cleaning_text[!grepl("LOCATION:", cleaning_text$text),]
+cleaning_text <- cleaning_text[is.na(cleaning_text$date),]
+af_cleaning_text <- cleaning_text[c(1:3)] 
+af_cleaning_text$title <- with(title, title[match(af_cleaning_text$id, id)])
+af_cleaning_text$location <- with(location, location[match(af_cleaning_text$id, id)])
+af_cleaning_text$date <- with(dates, date[match(af_cleaning_text$id, id)])
+af_cleaning_text$year <- format(as.Date(af_cleaning_text$date, format="%d/%m/%Y"), "%Y")
+after_clean_text <- af_cleaning_text
+      #alldata$market<-with(zipcodes, market[match(alldata$zip, zip)])               
+```
+
+
+```{r echo=FALSE}
+text_count <-after_clean_text %>%
+  group_by(newsgroup) %>%
+  summarize(value = n_distinct(id))
+```
+
+```{r}
+text_count %>%
+  mutate(newsgroup = reorder(newsgroup, value)) %>%
+  ggplot(aes(value, newsgroup)) +
+  geom_col(fill = "cornflowerblue") +
+  labs(y = 'Newgroups', x='No. of Articles')+
+  ggtitle("Frequency of News Articles by Newgroup")
+  
+```
+
+
+```{r}
+
+ggplot(af_cleaning_text, 
+       aes(x= as.numeric(year),
+           fill=newsgroup)) +
+  geom_bar()+
+  labs(y = 'No. of Articles', x='Year')+
+  ggtitle("Frequency of Articles from Newsgroups by Year")
+
+  
+```
+
+
+```{r}
+cleaned_text <- raw_text %>%
+  group_by(newsgroup, id) %>%
+  filter(cumsum(text == "") > 0,
+         cumsum(str_detect(
+           text, "^--")) == 0) %>%
+  ungroup()
+```
+
+```{r}
+cleaned_text <- af_cleaning_text %>%
+  filter(str_detect(text, "^[^>]+[A-Za-z\\d]")
+         | text == "",
+         !str_detect(text, 
+                     "writes(:|\\.\\.\\.)$"),
+         !str_detect(text, 
+                     "^In article <")
+  )
+```
+
+
+```{r}
+usenet_words <- cleaned_text %>%
+  unnest_tokens(word, text) %>%
+  filter(str_detect(word, "[a-z']$"),
+         !word %in% stop_words$word)
+
+```
+
+```{r}
+usenet_words %>%
+  mutate(word=wordStem(word))%>%
+  count(word, sort = TRUE)
+```
+
+```{r}
+words_by_newsgroup <- usenet_words %>%
+  filter(str_detect(word, "title")==FALSE)%>%
+  filter(str_detect(word, "published")==FALSE)%>%
+  filter(str_detect(word, "kronos")==FALSE)%>%
+  count(newsgroup,id, word, sort = TRUE) %>%
+  ungroup()
+```
+
+
+
+```{r}
+
+newsgroup_sentiments <- words_by_newsgroup %>%
+  mutate(word=wordStem(word))%>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  group_by(newsgroup) %>%
+  summarize(value = sum(value * n) / sum(n))
+
+newsgroup_sentiments %>%
+  mutate(newsgroup = reorder(newsgroup, value)) %>%
+  ggplot(aes(value, newsgroup, fill = value > 0)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = "Average sentiment value", y = NULL)+
+  ggtitle("News Sentiment Score using AFINN Sentiment Lexicon")
+```
+
+```{r}
+tf_idf <- words_by_newsgroup %>%
+  bind_tf_idf(word, newsgroup, n) %>%
+  arrange(desc(tf_idf))
+
+```
+
+```{r echo=TRUE, eval=TRUE}
+tf_idf %>%
+  group_by(newsgroup) %>%
+  slice_max(tf_idf, n = 5) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, tf_idf)) %>%
+  ggplot(aes(tf_idf, word, fill = newsgroup)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ newsgroup, scales = "free")+
+  scale_y_reordered()+
+  labs(x = "tf-idf", y = NULL)
+
+```
+
+
+
+
+```{r}
+newsgroup_cors <- words_by_newsgroup %>%
+  pairwise_cor(id, 
+               word, 
+               n, 
+               sort = TRUE)
+
+art_cors <- newsgroup_cors
+```
+
+
+
+
+```{r}
+art_cors <- merge(x=art_cors,y=dates, 
+                  by.x = "item1",                         
+                  by.y = "id", 
+                  all.x = TRUE, all.y = FALSE)
+
+```
+
+```{r}
+art_cors <- merge(x=art_cors,y=title, 
+                  by.x = "item1",                         
+                  by.y = "id", 
+                  all.x = TRUE, all.y = FALSE)
+
+```
+
+
+
+```{r}
+names(art_cors)[1] <- paste("article1")
+names(art_cors)[2] <- paste("article2")
+names(art_cors)[4] <- paste("newsgroup1")
+names(art_cors)[5] <- paste("date1")
+names(art_cors)[7] <- paste("title1")
+art_cors1 <- art_cors[-c(6)]
+```
+
+
+```{r}
+art_cors1 <- merge(x=art_cors1,y=title, 
+                  by.x = "article2",                         
+                  by.y = "id", 
+                  all.x = TRUE)
+
+```
+
+```{r}
+art_cors2 <- merge(x=art_cors1,y=dates, 
+                  by.x = "article2",                         
+                  by.y = "id", 
+                  all.x = TRUE, all.y = FALSE)
+
+```
+
+```{r}
+names(art_cors2)[7] <- paste("newsgroup2")
+names(art_cors2)[8] <- paste("title2")
+names(art_cors2)[10] <- paste("date2")
+art_cors_final <- art_cors2[-c(9)]
+
+```
+
+
+
+```{r echo=FALSE}
+DT::datatable(art_cors_final, filter = 'top')
+```
+
+
+
+```{r echo=FALSE}
+set.seed(2017)
+
+newsgroup_cors %>%
+  filter(correlation > .85) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(alpha = correlation, 
+                     width = correlation)) +
+  geom_node_point(size = 6, 
+                  color = "lightgreen") +
+  geom_node_text(aes(label = name),
+                 color = "red",
+                 repel = TRUE) +
+  theme_void()
+```
+
+
+
+
+
+```{r}
+totalwords <- words_by_newsgroup %>%
+  count(word, sort=TRUE)
+
+```
+
+```{r}
+set.seed(1234)
+wordcloud(totalwords$word,totalwords$n,max.words = 1000,
+          colors = brewer.pal(9, "Dark2"))
+
+```
+
+```{r}
+top_sentiment_words <- words_by_newsgroup %>%
+  mutate(word=wordStem(word))%>%
+  inner_join(get_sentiments("afinn"), by = "word") %>%
+  mutate(contribution = value * n / sum(n))
+
+```
+
+```{r echo=FALSE}
+DT::datatable(top_sentiment_words, 
+              caption = htmltools::tags$caption("Top Sentiment Words by Newsgroup", 
+                                                style ='color:green'), 
+              filter = 'top')%>% 
+  formatRound('value',4) %>%
+  formatRound('contribution',4) %>%
+  formatStyle(0, 
+              target = 'row', 
+              lineHeight='70%')
+```
+
+
+```{r}
+usenet_bigrams <- cleaned_text %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+```
+
+```{r}
+usenet_bigram_counts <- usenet_bigrams %>%
+  count(newsgroup, bigram, sort = TRUE) %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+```
+
+```{r}
+
+key_persons <- c("sanjorge", "carmine", "nespola", "marek", 
+                 "bodrogi", "jeroen","juliana","kapelou", "elian")
+
+usenet_bigram_counts %>%
+  filter(word1 %in% key_persons) %>%
+  count(word1, word2, wt = n, sort = TRUE) %>%
+  inner_join(get_sentiments("afinn"), by = c(word2 = "word")) %>%
+  mutate(contribution = value * n) %>%
+  group_by(word1) %>%
+  slice_max(abs(contribution), n = 5) %>%
+  ungroup() %>%
+  mutate(word2 = reorder_within(word2, contribution, word1)) %>%
+  ggplot(aes(contribution, word2, fill = contribution > 0)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ word1, scales = "free", nrow = 6) +
+  scale_y_reordered() +
+  labs(x = "Sentiment value of occurrences",
+       y = "Words associated with key persons")
+
+
+```
+
+
+```{r}
+
+key_entities <- c("pok", "government", "gastech", "wfa")
+
+usenet_bigram_counts %>%
+  filter(word1 %in% key_entities) %>%
+  count(word1, word2, wt = n, sort = TRUE) %>%
+  inner_join(get_sentiments("afinn"), by = c(word2 = "word")) %>%
+  mutate(contribution = value * n) %>%
+  group_by(word1) %>%
+  slice_max(abs(contribution), n = 15) %>%
+  ungroup() %>%
+  mutate(word2 = reorder_within(word2, contribution, word1)) %>%
+  ggplot(aes(contribution, word2, fill = contribution > 0)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ word1, scales = "free", nrow = 3) +
+  scale_y_reordered() +
+  labs(x = "Sentiment value of occurrences",
+       y = "Words associated with key entities")
+
+```
+```{r}
+
+key_places <- c("tiskele", "elodis", "kronos","tethys", 
+                "abila", "rural", "city", "fields", "port", "pilau")
+
+usenet_bigram_counts %>%
+  filter(word1 %in% key_places) %>%
+  count(word1, word2, wt = n, sort = TRUE) %>%
+  inner_join(get_sentiments("afinn"), by = c(word2 = "word")) %>%
+  mutate(contribution = value * n) %>%
+  group_by(word1) %>%
+  slice_max(abs(contribution), n = 5) %>%
+  ungroup() %>%
+  mutate(word2 = reorder_within(word2, contribution, word1)) %>%
+  ggplot(aes(contribution, word2, fill = contribution > 0)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ word1, scales = "free", nrow = 3) +
+  scale_y_reordered() +
+  labs(x = "Sentiment value of occurrences",
+       y = "Words associated with key places")
+
+```
+
+```{r}
+
+key_places <- c("contamination", "protests", "kidnapping", "death","arrested",
+                "disease", "movement", "alliance")
+
+usenet_bigram_counts %>%
+  filter(word1 %in% key_places) %>%
+  count(word1, word2, wt = n, sort = TRUE) %>%
+  inner_join(get_sentiments("afinn"), by = c(word2 = "word")) %>%
+  mutate(contribution = value * n) %>%
+  group_by(word1) %>%
+  slice_max(abs(contribution), n = 3) %>%
+  ungroup() %>%
+  mutate(word2 = reorder_within(word2, contribution, word1)) %>%
+  ggplot(aes(contribution, word2, fill = contribution > 0)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ word1, scales = "free", nrow = 3) +
+  scale_y_reordered() +
+  labs(x = "Sentiment value of occurrences",
+       y = "Words associated with key events")
+
+```
+
+
+
+```{r}
+raw_emails <- read_csv("data/email headers.csv")
+
+```
+
+```{r}
+employee_rec <- read_excel("data/EmployeeRecords.xlsx")
+
+```
+
+```{r echo=TRUE, eval=TRUE}
+raw_emails$Date <- date_time_parse(raw_emails$Date,
+                                   zone = "",
+                                   format = "%m/%d/%Y %H:%M")
+```
+
+
+```{r echo=TRUE, eval=TRUE}
+raw_emails$Weekday = wday(raw_emails$Date, 
+                             label = TRUE, 
+                             abbr = FALSE)
+
+```
+
+
+```{r echo=TRUE, eval=TRUE}
+cleaned_emails <- raw_emails%>%
+  mutate(To = str_remove_all(To, ","))%>%
+  mutate(To = str_remove_all(To, From))%>%
+  mutate(To = str_remove_all(To, "@gastech.com.kronos"))%>%
+  mutate(To = str_remove_all(To, "@gastech.com.tethys"))
+
+```
+
+  mutate(To = str_remove_all(To, " "))%>%
+```{r echo=TRUE, eval=TRUE}
+cleaned_emails <- cleaned_emails%>%
+  mutate(From = str_remove_all(From, "@gastech.com.kronos"))%>%
+  mutate(From = str_remove_all(From, "@gastech.com.tethys"))
+```
+
+```{r echo=TRUE, eval=TRUE}
+employee_rec <- employee_rec %>% 
+  mutate(EmailAddress = str_remove_all(EmailAddress, "@gastech.com.kronos"))%>%
+  mutate(EmailAddress = str_remove_all(EmailAddress, "@gastech.com.tethys"))
+
+```
+
+##Generate id_From for sender, and id_To for receiver in emails:
+```{r echo=TRUE, eval=TRUE}
+cleaned_emails <- transform(cleaned_emails, id_From 
+                            =as.numeric(factor(cleaned_emails$From)))
+
+```
+
+
+```{r echo=TRUE, eval=TRUE}
+cleaned_emails <- cleaned_emails %>% 
+  separate(To, c("To_1", "To_2", "To_3", "To_4", "To_5", "To_6", "To_7", 
+                 "To_8", "To_9", "To_10", "To_11", "To_12"), " ")
+
+```
+
+
+
+```{r}
+email_transpose <- pivot_longer(cleaned_emails, cols=2:13, 
+                                 names_to = "Recipient#",
+                                 values_to = "To")
+```
+
+```{r}
+email_transpose <- email_transpose[complete.cases(email_transpose),]
+email_transpose <- email_transpose[!(email_transpose$To == 
+                                       ""|email_transpose$To=="Jr."),]    
+email_transpose$To[email_transpose$To=="Sten.Sanjorge"] <- "Sten.Sanjorge Jr."
+```
+
+
+
+```{r}
+nodes <- email_transpose[c("id_From","From")]
+nodes <- nodes%>% distinct()
+names(nodes)[1] <- paste("id")
+names(nodes)[2] <- paste("Name")
+
+```
+
+```{r echo=TRUE, eval=TRUE}
+email_transpose <- merge(x = nodes, y = email_transpose, 
+               by.x = "Name", 
+               by.y = "To", all.x = TRUE)
+
+```
+
+
+```{r echo=TRUE, eval=TRUE}
+names(email_transpose)[1] <- paste("To")
+names(email_transpose)[2] <- paste("id_To")
+```
+
+```{r echo=TRUE, eval=TRUE}
+GASTech_nodes <- merge(x= nodes, y= employee_rec, 
+                       by.x = "Name", by.y="EmailAddress", all.x = FALSE)
+
+```
+
+```{r echo=TRUE, eval=TRUE}
+GAStech_edges_aggregated <- email_transpose %>%
+  group_by(id_From, id_To, Weekday) %>%
+  summarise(Weight = n()) %>%
+  filter(id_From!=id_To) %>%
+  filter(Weight > 1) %>%
+  ungroup()
+
+```
+ # filter(Main_Subject == "Work related") %>%
+
+```{r echo=FALSE, eval=TRUE}
+glimpse(GAStech_edges_aggregated)
+```
+
+
+
+
+
+```{r, echo=TRUE, eval=TRUE}
+GAStech_graph <- tbl_graph(nodes = GASTech_nodes,
+                           edges = GAStech_edges_aggregated, 
+                           directed = TRUE)
+```
+
+ 
+
+
+```{r}
+GAStech_graph
+```
+
+```{r}
+g <- GAStech_graph %>%
+  ggraph(layout = "fr") + 
+  geom_edge_link(aes(width=Weight), 
+                 alpha=0.2) +
+  scale_edge_width(range = c(0.1, 5)) +
+  geom_node_point(aes(colour = Name, 
+                      size = centrality_betweenness()))
+g + theme_graph()
+```
+```{r echo=FALSE}
+GASTech_nodes_selected <- GASTech_nodes[,c(1,14, 15,8,17)]
+
+
+```
+
+
+```{r echo=FALSE}
+DT::datatable(GASTech_nodes_selected, 
+              colnames = c("Department"=3, "Position"=4,"Country"=5,
+                           "Military Service"=6),
+              options = list(pageLength=10), 
+              filter = 'top')%>%
+  formatStyle(0, 
+              target = 'row',
+              lineHeight="95%")
+```
+
+
+```{r}
+set_graph_style() 
+
+g <- ggraph(GAStech_graph, 
+            layout = "nicely") + 
+  geom_edge_link(aes(width=Weight), 
+                 alpha=0.2) +
+  scale_edge_width(range = c(0.1, 5)) +
+  geom_node_point(aes(colour = CurrentEmploymentType), 
+                  size = 2)
+  
+g + facet_edges(~Weekday) +
+  th_foreground(foreground = "grey80",  
+                border = TRUE) +
+  theme(legend.position = 'bottom')
+```
+
+
+
+```{r}
+g <- GAStech_graph %>%
+  ggraph(layout = "fr") + 
+  geom_edge_link(aes(width=Weight), 
+                 alpha=0.2) +
+  scale_edge_width(range = c(0.1, 5)) +
+  geom_node_point(aes(colour = CurrentEmploymentTitle, 
+                      size = centrality_betweenness()))
+g + theme_graph()
+```
+
+
+```{r}
+g <- GAStech_graph %>%
+  ggraph(layout = "fr") + 
+  geom_edge_link(aes(width=Weight), 
+                 alpha=0.2) +
+  scale_edge_width(range = c(0.1, 5)) +
+  geom_node_point(aes(colour = CitizenshipCountry, 
+                      size = centrality_betweenness()))
+g + theme_graph()
+```
+```{r}
+g <- GAStech_graph %>%
+  ggraph(layout = "fr") + 
+  geom_edge_link(aes(width=Weight), 
+                 alpha=0.2) +
+  scale_edge_width(range = c(0.1, 5)) +
+  geom_node_point(aes(colour = Gender, 
+                      size = centrality_betweenness()))
+g + theme_graph()
+```
+
+```{r}
+g <- GAStech_graph %>%
+  ggraph(layout = "fr") + 
+  geom_edge_link(aes(width=Weight), 
+                 alpha=0.2) +
+  scale_edge_width(range = c(0.1, 5)) +
+  geom_node_point(aes(colour = MilitaryServiceBranch, 
+                      size = centrality_betweenness()))
+g + theme_graph()
 ```
 
